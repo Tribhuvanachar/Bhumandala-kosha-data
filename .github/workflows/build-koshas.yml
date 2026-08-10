@@ -1,0 +1,82 @@
+name: Build Kosha corpus
+
+# Runs in the DATA repo (e.g. bhumandala-kosha-data). It clones the dictionary
+# sources, builds the full sharded corpus, and force-pushes the result to a
+# single-commit `dist` branch that jsDelivr serves. The app points at:
+#   https://cdn.jsdelivr.net/gh/<owner>/<data-repo>@dist/data/koshas
+#
+# Trigger it by hand from the Actions tab (workflow_dispatch). The monthly
+# schedule is commented out — enable it if you want an automatic refresh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Comma-separated slugs to build (blank = all 63)"
+        required: false
+        default: ""
+      raw:
+        description: "Also keep verbatim entry_raw (much larger output)"
+        type: boolean
+        default: false
+  # schedule:
+  #   - cron: "0 3 1 * *"   # 03:00 UTC on the 1st of each month
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-koshas
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout build scripts (main branch of this data repo)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Clone dictionary sources (indic-dict/stardict-sanskrit)
+        run: git clone --depth 1 https://github.com/indic-dict/stardict-sanskrit.git sources
+
+      - name: Build corpus
+        env:
+          INPUT_ONLY: ${{ inputs.only }}
+          INPUT_RAW: ${{ inputs.raw }}
+        run: |
+          set -e
+          mkdir -p build
+          args=(--sources sources --out ./build)
+          if [ "$INPUT_RAW" = "true" ]; then args+=(--raw); fi
+          if [ -n "$INPUT_ONLY" ]; then args+=(--only "$INPUT_ONLY"); fi
+          python build_koshas.py "${args[@]}"
+
+      - name: Report corpus size
+        run: |
+          du -sh build/data/koshas
+          echo "manifest dictionaries:"
+          python -c "import json;m=json.load(open('build/data/koshas/_index/manifest.json'));print(len(m['dictionaries']),'dicts,',len(m['buckets']),'buckets')"
+
+      - name: Deploy to dist branch (single commit — no history bloat)
+        run: |
+          set -e
+          cp README_dist.md build/README.md 2>/dev/null || true
+          cd build
+          git init -q
+          git config user.name  "kosha-bot"
+          git config user.email "kosha-bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Kosha corpus build $(date -u +%Y-%m-%dT%H:%MZ)"
+          git branch -M dist
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" dist
+
+      - name: Purge jsDelivr cache for the manifest (best-effort)
+        run: |
+          curl -sf "https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/data/koshas/_index/manifest.json" || true
+          echo "Note: jsDelivr caches branch files ~12h; individual shard files purge on first request or via https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/<path>"
