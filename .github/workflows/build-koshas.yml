@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Comma-separated slugs to build (blank = all 63)"
+        description: "Comma-separated slugs to build (blank = all 93)"
         required: false
         default: ""
       raw:
@@ -42,8 +42,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Clone dictionary sources (indic-dict/stardict-sanskrit)
-        run: git clone --depth 1 https://github.com/indic-dict/stardict-sanskrit.git sources
+      - name: Clone dictionary sources (indic-dict)
+        # One checkout per source repo, each directory named after the repo —
+        # that is how dicts_config.json's "repo" key is resolved. -vyAkaraNa is
+        # fetched sparsely: its vidyut/* and _deprecated/* trees are hundreds of
+        # megabytes of machine-generated inflection tables that the corpus does
+        # not carry (see README.md, "What is deliberately not ingested").
+        run: |
+          set -e
+          mkdir -p sources
+          git clone --depth 1 https://github.com/indic-dict/stardict-sanskrit.git sources/stardict-sanskrit
+          git clone --depth 1 https://github.com/indic-dict/stardict-sanskrit-kAvya.git sources/stardict-sanskrit-kAvya
+          git clone --depth 1 --filter=blob:none --no-checkout \
+            https://github.com/indic-dict/stardict-sanskrit-vyAkaraNa.git sources/stardict-sanskrit-vyAkaraNa
+          cd sources/stardict-sanskrit-vyAkaraNa
+          git sparse-checkout set --no-cone \
+            'aShTAdhyAyI/**/*.babylon' 'dhAtu/**/*.babylon' 'misc/**/*.babylon'
+          git checkout
 
       - name: Build corpus
         env:
@@ -52,7 +67,7 @@ jobs:
         run: |
           set -e
           mkdir -p build
-          args=(--sources sources --out ./build)
+          args=(--sources-root sources --out ./build)
           if [ "$INPUT_RAW" = "true" ]; then args+=(--raw); fi
           if [ -n "$INPUT_ONLY" ]; then args+=(--only "$INPUT_ONLY"); fi
           python build_koshas.py "${args[@]}"

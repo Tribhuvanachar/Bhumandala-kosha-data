@@ -16,6 +16,40 @@ import re, json, os, struct, gzip, io, collections
 # build driver flips it with --raw.
 KEEP_RAW = False
 
+# Per-dictionary text-handling knobs, refreshed by set_opts() before each
+# dictionary is parsed (same module-global style as KEEP_RAW). The defaults
+# reproduce the original behaviour exactly for the Cologne-era 63.
+#   link_text 'drop'   : delete <a>…</a> whole — right for Cologne, whose
+#                        anchors are PDF-page and correction links.
+#   link_text 'unwrap' : keep each anchor's text and drop only navigation
+#                        anchors (href starting with '_' or '#') — right for
+#                        the encyclopaedias, where the cross-references ARE
+#                        the prose ("son of <a …>arjuna</a>").
+#   block_breaks       : treat </div>, </p>, </li>, </h1-6>, </tr> as line
+#                        breaks. The Cologne set separates with <br>; the
+#                        encyclopaedias nest divs, and without this the heading
+#                        runs straight into the first word of the article.
+#   strip              : regexes replaced by a line break in the cleaned text,
+#                        for the page furniture ("word6", "P1L", catalogue ids)
+#                        those sources carry.
+#   json_body          : the entry body is a JSON object of Sanskrit field
+#                        names (the ashtadhyayi.com-derived dhatu sets) —
+#                        render it as "field: value" prose instead of braces.
+#   no_homonym_split   : do not split the body on repetitions of the headword.
+#                        Needed wherever the headword legitimately recurs mid
+#                        entry, as in the Astadhyayi sets keyed on sutra text.
+OPTS = {'link_text': 'drop', 'block_breaks': False, 'strip': (),
+        'json_body': False, 'no_homonym_split': False}
+
+_BLOCK_END = re.compile(r'</(?:div|p|li|h[1-6]|tr|blockquote|table)\s*>', re.I)
+
+def set_opts(dcfg):
+    OPTS['link_text'] = dcfg.get('link_text', 'drop')
+    OPTS['block_breaks'] = bool(dcfg.get('block_breaks', False))
+    OPTS['strip'] = tuple(re.compile(p, re.M) for p in dcfg.get('strip', ()))
+    OPTS['json_body'] = bool(dcfg.get('json_body', False))
+    OPTS['no_homonym_split'] = bool(dcfg.get('no_homonym_split', False))
+
 # ---------- Devanagari -> SLP1 (stdlib) --------------------------------------
 _V = {'अ':'a','आ':'A','इ':'i','ई':'I','उ':'u','ऊ':'U','ऋ':'f','ॠ':'F','ऌ':'x','ॡ':'X',
       'ए':'e','ऐ':'E','ओ':'o','औ':'O','ऑ':'O','ऎ':'e','ऒ':'o'}
@@ -59,12 +93,31 @@ FIELD_MAP = {
 }
 _BOLD = re.compile(r'<b>\s*([^<]+?)\s*[-:]\s*</b>', re.I)
 
+_NAV_A = re.compile(r'<a\b[^>]*\bhref\s*=\s*["\']?[_#][^>]*>.*?</a>', re.I | re.S)
+
 def _clean(html):
-    t = re.sub(r'<br\s*/?>', '\n', html, flags=re.I)
-    t = re.sub(r'<a\b[^>]*>.*?</a>', '', t, flags=re.I | re.S)  # drop Cologne PDF/correction links
+    # <style>/<script> bodies are not prose: strip the element AND its content
+    # before tag-stripping, or the encyclopaedias' CSS lands inside the gloss.
+    t = re.sub(r'<(style|script)\b[^>]*>.*?</\1>', '', html, flags=re.I | re.S)
+    t = re.sub(r'<!--.*?-->', '', t, flags=re.S)
+    t = re.sub(r'<br\s*/?>', '\n', t, flags=re.I)
+    if OPTS['block_breaks']:
+        t = _BLOCK_END.sub('\n', t)
+    if OPTS['link_text'] == 'unwrap':
+        t = _NAV_A.sub('', t)                                   # page/footnote navigation only
+    else:
+        t = re.sub(r'<a\b[^>]*>.*?</a>', '', t, flags=re.I | re.S)  # Cologne PDF/correction links
     t = re.sub(r'<[^>]+>', '', t)
     t = (t.replace('&lt;','<').replace('&gt;','>').replace('&amp;','&')
            .replace('&nbsp;',' ').replace('&quot;','"'))
+    if OPTS['strip'] or OPTS['block_breaks']:
+        # A line break, not '', so removing "…word8" between a heading and its
+        # article does not weld them together. Tidying the resulting blank runs
+        # is confined to this branch so the Cologne-era output stays identical.
+        for rx in OPTS['strip']:
+            t = rx.sub('\n', t)
+        t = re.sub(r'[ \t]*\n[ \t]*', '\n', t)
+        t = re.sub(r'\n{3,}', '\n\n', t)
     return re.sub(r'[ \t]+', ' ', t).strip().strip('\n').strip()
 
 def _sense_from_segment(seg, gloss_language):
@@ -86,15 +139,34 @@ def _sense_from_segment(seg, gloss_language):
     if fields.get('note'): sense['note'] = ' '.join(fields['note'])
     if not sense:                      # unstructured (Cologne etc.): body IS the gloss
         g = _clean(seg)
+        if g and OPTS['json_body']: g = _json_to_prose(g)
         if g: sense = {'gloss': g, 'gloss_language': gloss_language}
     return sense or None
+
+
+def _json_to_prose(text):
+    """"{"धातुः":["लर्ब्"],"गणः":["भ्वादिः"]}" -> "धातुः: लर्ब्; गणः: भ्वादिः".
+    Left untouched if it is not in fact a JSON object."""
+    if not text.startswith('{'): return text
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(obj, dict): return text
+    out = []
+    for k, v in obj.items():
+        if isinstance(v, list): v = ', '.join(str(x) for x in v if str(x).strip())
+        v = str(v).strip()
+        if v: out.append('%s: %s' % (k, v))
+    return '; '.join(out) or text
 
 def body_to_senses(headword, body, gloss_language):
     """Split a body that packs several homonyms (each led by the repeated
     headword, separated by <br><br>) into one sense per homonym."""
     hw = re.escape(headword)
     b = re.sub(r'^\s*' + hw + r'\s*(?:<br\s*/?>\s*){1,2}', '', body, count=1, flags=re.I)
-    segs = re.split(r'(?:<br\s*/?>\s*){1,2}' + hw + r'\s*(?:<br\s*/?>\s*){1,2}', b, flags=re.I)
+    segs = ([b] if OPTS['no_homonym_split'] else
+            re.split(r'(?:<br\s*/?>\s*){1,2}' + hw + r'\s*(?:<br\s*/?>\s*){1,2}', b, flags=re.I))
     senses = [s for s in (_sense_from_segment(seg, gloss_language) for seg in segs if seg.strip()) if s]
     if not senses:
         s = _sense_from_segment(body, gloss_language)
@@ -102,7 +174,18 @@ def body_to_senses(headword, body, gloss_language):
     return senses
 
 # ---------- input kind 1: .babylon -------------------------------------------
-def iter_babylon(path):
+def iter_babylon(path, head_pick=0, head_strip=None, syn_drop=None):
+    """head_pick   which '|'-separated alternative is the real headword. The
+                   aShTAdhyAyI dictionaries key on the sūtra NUMBER (१.१.१) and
+                   carry the sūtra text second; head_pick=1 makes the text the
+                   headword (the index only searches headwords) and demotes the
+                   number to a synonym.
+       head_strip  regex peeled off the headword — the cultural index prefixes
+                   every entry with a list marker ("➤ 01)  अकर्कर").
+       syn_drop    regex marking alternatives that are internal machinery
+                   (page anchors like "_pe_@6", "p1_mci"), not real synonyms."""
+    head_strip = re.compile(head_strip) if head_strip else None
+    syn_drop = re.compile(syn_drop) if syn_drop else None
     with open(path, encoding='utf-8') as f:
         raw = f.read()
     lines = raw.split('\n'); start = 0
@@ -118,8 +201,14 @@ def iter_babylon(path):
         head_line = blk if nl < 0 else blk[:nl]
         body = '' if nl < 0 else blk[nl+1:]
         heads = [h.strip() for h in head_line.split('|') if h.strip()]
-        if heads:
-            yield heads[0], heads[1:], body
+        if head_strip:
+            heads = [h for h in (head_strip.sub('', h).strip() for h in heads) if h]
+        if syn_drop:
+            heads = [h for h in heads if not syn_drop.match(h)]
+        if not heads:
+            continue
+        pick = head_pick if head_pick < len(heads) else 0
+        yield heads[pick], heads[:pick] + heads[pick+1:], body
 
 # ---------- input kind 2: compiled StarDict ----------------------------------
 def _read_ifo(ifo_path):
@@ -231,7 +320,11 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
         hlang, glang = dcfg.get('headword_language', 'sa'), dcfg.get('gloss_language', 'en')
         base = clone_root if kind == 'babylon' else local_root
         path = dcfg['path'] if os.path.isabs(dcfg['path']) else os.path.join(base or '', dcfg['path'])
-        it = iter_babylon(path) if kind == 'babylon' else iter_stardict(path)
+        set_opts(dcfg)
+        it = (iter_babylon(path, head_pick=dcfg.get('head_pick', 0),
+                           head_strip=dcfg.get('head_strip'),
+                           syn_drop=dcfg.get('syn_drop'))
+              if kind == 'babylon' else iter_stardict(path))
         try:
             items = build_items(it, slug, hlang, glang)
         except Exception as e:
@@ -255,6 +348,9 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
               'license': dcfg.get('license', 'Unclear'),
               'attribution': dcfg.get('attribution', ''),
               'source_url': dcfg.get('source_url', '')}
+        # the licence caveat has to travel with the data, not only sit in the
+        # build config — it is the whole basis on which an Unclear dict ships.
+        if dcfg.get('license_note'): sm['license_note'] = dcfg['license_note']
         with open(os.path.join(folder, 'meta.json'), 'w', encoding='utf-8') as fo:
             json.dump({'schema': 'kosha_entry', 'source_meta': sm,
                        'entry_shard_len': entry_shard_len,
