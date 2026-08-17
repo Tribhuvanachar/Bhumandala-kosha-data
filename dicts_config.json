@@ -1201,5 +1201,33 @@
   "attribution": "indic-dict/stardict-sanskrit-vyAkaraNa",
   "source_url": "https://github.com/indic-dict/stardict-sanskrit-vyAkaraNa/tree/master/dhAtu/mAdhavIya-dhAtu-vRtti",
   "path": "dhAtu/mAdhavIya-dhAtu-vRtti/mAdhavIya-dhAtu-vRtti.babylon"
+ },
+ {
+  "slug": "bohtlingk-kurzere-fassung-nachtrage",
+  "kind": "cdsl",
+  "repo": "csl-orig",
+  "category": "sanskrit_german",
+  "headword_language": "sa",
+  "gloss_language": "de",
+  "name": "Bohtlingk, kurzere Fassung — Nachtrage und Verbesserungen",
+  "license": "CC-BY-SA 4.0",
+  "attribution": "Cologne Digital Sanskrit Dictionaries",
+  "source_url": "https://github.com/sanskrit-lexicon/csl-orig/tree/master/v02/pwkvn",
+  "path": "v02/pwkvn/pwkvn.txt",
+  "license_note": "The addenda and corrigenda to Bohtlingk’s Sanskrit-Worterbuch in kurzerer Fassung, which the indic-dict mirror does not carry. Companion to the already-loaded bohtlingk-sanskrit-worterbuch-in-kurzerer-fassung."
+ },
+ {
+  "slug": "kridanta-rupamala",
+  "kind": "cdsl",
+  "repo": "csl-orig",
+  "category": "sanskrit_sanskrit",
+  "headword_language": "sa",
+  "gloss_language": "sa",
+  "name": "Kridanta-rupamala",
+  "license": "CC-BY-SA 4.0",
+  "attribution": "Cologne Digital Sanskrit Dictionaries",
+  "source_url": "https://github.com/sanskrit-lexicon/csl-orig/tree/master/v02/krm",
+  "path": "v02/krm/krm.txt",
+  "license_note": "Cologne digitisation of the text itself, keyed on 2,061 dhatu entries with citations — not the machine-generated paradigm table of the same name in stardict-sanskrit-vyAkaraNa, which stays excluded."
  }
 ]
