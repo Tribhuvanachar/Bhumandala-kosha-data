@@ -6,6 +6,7 @@
 #
 # Two input kinds, one output path:
 #   - 'babylon'  : indic-dict .babylon SOURCE text (cloned from GitHub)
+#   - 'cdsl'     : Cologne sanskrit-lexicon/csl-orig v02 .txt (SLP1 + pseudo-XML)
 #   - 'stardict' : compiled .ifo/.idx/.dict[.dz]/.syn (your local dict.zip)
 # Both yield (headword, html_body); the SAME builder maps them to kosha_entry.
 # =============================================================================
@@ -76,6 +77,53 @@ def dev2slp1(text):
         if ch in _S: out.append(_S[ch]); i += 1; continue
         if ch == _VIRAMA: i += 1; continue
         out.append(ch); i += 1
+    return ''.join(out)
+
+# ---------- SLP1 -> Devanagari ------------------------------------------------
+# The Cologne source files key every entry on an SLP1 string and mark Devanagari
+# spans as SLP1 too, so the reader needs the inverse of dev2slp1 above. Built by
+# inverting the same tables, so the two can never drift apart.
+# setdefault throughout, never a dict comprehension: several Devanagari letters
+# share one SLP1 code (ए/ऎ both 'e', क/क़ both 'k'), and a comprehension lets the
+# LAST spelling win — which silently wrote the southern short ऎ for every 'e',
+# turning veda into वॆद. First spelling is the canonical one.
+def _invert(d):
+    out = {}
+    for k, v in d.items(): out.setdefault(v, k)
+    return out
+_SLP_V = _invert(_V)
+_SLP_M = _invert(_M)
+_SLP_C = _invert(_C)
+_SLP_S = _invert(_S)
+# Longest-first so 'A'/'I' are not eaten by a shorter key, and consonants are
+# tried before vowels because every consonant carries an inherent 'a'.
+_SLP_TOK = re.compile('|'.join(sorted(
+    (re.escape(k) for k in list(_SLP_C) + list(_SLP_V) + list(_SLP_S)),
+    key=len, reverse=True)))
+
+def slp12dev(text):
+    out, i, n = [], 0, len(text)
+    while i < n:
+        m = _SLP_TOK.match(text, i)
+        if not m:
+            out.append(text[i]); i += 1; continue
+        t = m.group(0); i = m.end()
+        if t in _SLP_C:
+            out.append(_SLP_C[t])
+            # what follows decides the vowel sign: another consonant or the end
+            # means virama, a bare 'a' means the inherent vowel and no sign.
+            m2 = _SLP_TOK.match(text, i)
+            nxt = m2.group(0) if m2 else ''
+            if nxt == 'a':
+                i = m2.end()
+            elif nxt in _SLP_V:
+                out.append(_SLP_M.get(nxt, '')); i = m2.end()
+            else:
+                out.append(_VIRAMA)
+        elif t in _SLP_V:
+            out.append(_SLP_V[t])
+        else:
+            out.append(_SLP_S[t])
     return ''.join(out)
 
 def fold(slp1):
@@ -267,6 +315,50 @@ def iter_stardict(ifo_path):
                     body = chunk.decode('utf-8', 'replace')
         yield word, syn_map.get(wi, []), body
 
+# ---------- input kind 3: Cologne (sanskrit-lexicon/csl-orig) -----------------
+# The canonical Cologne sources, one .txt per dictionary under v02/<code>/. An
+# entry runs from <L> to <LEND>; the <L> line carries the keys, everything after
+# it is the body. Devanagari is stored as SLP1 inside {#...#} or <s>...</s>, so
+# it has to be transcoded before the shared HTML cleaner ever sees it.
+_CDSL_ENTRY = re.compile(r'<L>(.*?)<LEND>', re.S)
+_CDSL_KEYS = re.compile(r'<k1>(.*?)<k2>([^<\n]*)', re.S)
+
+def _cdsl_body(t):
+    # SLP1 spans -> Devanagari. {%...%} is italic (the German/English gloss) and
+    # {@...@} bold; both are kept as plain text, since the shared sense-splitter
+    # works on text, not on typography.
+    t = re.sub(r'\{#(.*?)#\}', lambda m: slp12dev(m.group(1)), t, flags=re.S)
+    t = re.sub(r'<s>(.*?)</s>', lambda m: slp12dev(m.group(1)), t, flags=re.S)
+    t = re.sub(r'\{[%@](.*?)[%@]\}', r'\1', t, flags=re.S)
+    t = re.sub(r'<ls>(.*?)</ls>', r'[\1]', t, flags=re.S)      # literature citation
+    t = re.sub(r'<(?:div|sup|hom|lex|ab|vlex|etym|bot|bio|info)\b[^>]*>', ' ', t, flags=re.I)
+    t = re.sub(r'</(?:div|sup|hom|lex|ab|vlex|etym|bot|bio|info)>', ' ', t, flags=re.I)
+    t = t.replace('¦', ' ').replace('〉', ') ').replace('〈', ' (')
+    t = re.sub(r'\[Page[^\]]*\]', ' ', t)                     # page furniture
+    t = re.sub(r'<pc>[^<\n]*', ' ', t)
+    return t.strip()
+
+def iter_cdsl(path):
+    with open(path, encoding='utf-8', errors='replace') as f:
+        raw = f.read()
+    for blk in _CDSL_ENTRY.findall(raw):
+        nl = blk.find('\n')
+        head_line = blk if nl < 0 else blk[:nl]
+        body = '' if nl < 0 else blk[nl + 1:]
+        km = _CDSL_KEYS.search(head_line)
+        if not km:
+            continue
+        k1 = km.group(1).strip()
+        k2 = (km.group(2) or '').strip()
+        if not k1:
+            continue
+        hw = slp12dev(k1)
+        syns = []
+        if k2 and k2 != k1:
+            d2 = slp12dev(k2)
+            if d2 and d2 != hw: syns.append(d2)
+        yield hw, syns, _cdsl_body(body)
+
 # ---------- build kosha_entry items ------------------------------------------
 def build_items(entry_iter, slug, headword_language, gloss_language):
     grouped = collections.OrderedDict()   # headword -> {senses, syns, raw}
@@ -318,13 +410,17 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
         slug, kind = dcfg['slug'], dcfg['kind']
         cat = dcfg.get('category', 'misc')
         hlang, glang = dcfg.get('headword_language', 'sa'), dcfg.get('gloss_language', 'en')
-        base = clone_root if kind == 'babylon' else local_root
+        base = local_root if kind == 'stardict' else clone_root
         path = dcfg['path'] if os.path.isabs(dcfg['path']) else os.path.join(base or '', dcfg['path'])
         set_opts(dcfg)
-        it = (iter_babylon(path, head_pick=dcfg.get('head_pick', 0),
-                           head_strip=dcfg.get('head_strip'),
-                           syn_drop=dcfg.get('syn_drop'))
-              if kind == 'babylon' else iter_stardict(path))
+        if kind == 'babylon':
+            it = iter_babylon(path, head_pick=dcfg.get('head_pick', 0),
+                              head_strip=dcfg.get('head_strip'),
+                              syn_drop=dcfg.get('syn_drop'))
+        elif kind == 'cdsl':
+            it = iter_cdsl(path)
+        else:
+            it = iter_stardict(path)
         try:
             items = build_items(it, slug, hlang, glang)
         except Exception as e:

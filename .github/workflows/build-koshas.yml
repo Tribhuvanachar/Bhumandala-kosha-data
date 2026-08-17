@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Comma-separated slugs to build (blank = all 93)"
+        description: "Comma-separated slugs to build (blank = all 95)"
         required: false
         default: ""
       raw:
@@ -58,6 +58,15 @@ jobs:
           cd sources/stardict-sanskrit-vyAkaraNa
           git sparse-checkout set --no-cone \
             'aShTAdhyAyI/**/*.babylon' 'dhAtu/**/*.babylon' 'misc/**/*.babylon'
+          git checkout
+          cd ../..
+          # Cologne's canonical sources. Only the two dictionaries the indic-dict
+          # mirror lacks are ingested from here (see dicts_config.json), so the
+          # checkout is sparse — the full v02 tree is several GB.
+          git clone --depth 1 --filter=blob:none --no-checkout \
+            https://github.com/sanskrit-lexicon/csl-orig.git sources/csl-orig
+          cd sources/csl-orig
+          git sparse-checkout set --no-cone 'v02/pwkvn/pwkvn.txt' 'v02/krm/krm.txt'
           git checkout
 
       - name: Build corpus
