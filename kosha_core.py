@@ -398,12 +398,62 @@ def _safe(b):
 def _langs_of(item):
     return sorted({s.get('gloss_language', '') for s in item['senses'] if s.get('gloss_language')})
 
+# Which synonyms are worth an index entry. Latin ones are excluded on purpose:
+# a genuine transliteration is already found, because the lookup runs the query
+# through Sanscript before folding, and most of what is left is not a synonym
+# at all but a fragment of an English gloss that happened to sit after a "|" in
+# the source ("apva" -> "abounding in wat"). Multi-word values go the same way.
+def _indexable_synonyms(item):
+    out = []
+    for syn in (item.get('synonyms') or []):
+        if not syn or len(syn.split()) > 1: continue
+        if all(ch.isascii() for ch in syn): continue
+        # Transcode from the text, never by position in synonyms_slp1: that
+        # list is built with its own sorted() over a set, so index i in one
+        # array is not index i in the other. Zipping them paired वनमालिका with
+        # the SLP1 of an unrelated synonym and indexed it under fold "sfngara".
+        out.append((syn, dev2slp1(syn)))
+    return out
+
+
+# The 2-character prefix alone leaves a brutally skewed index: "sa" was 16.8MB
+# while the median shard was 1KB, so one search on a common prefix downloaded
+# the whole neighbourhood. Any bucket over the cap is split a character deeper,
+# repeatedly, so the manifest ends up holding a mix of 2-, 3- and 4-character
+# bucket names. Callers must therefore match buckets by prefix rather than by
+# slicing the query to a fixed width.
+BUCKET_MAX_RECORDS = 20000
+BUCKET_MAX_DEPTH = 5
+
+def _bucketize(tier1, base_len):
+    groups = collections.defaultdict(dict)
+    for f, recs in tier1.items():
+        groups[(f[:base_len] or '_')][f] = recs
+    out = {}
+    for name, mp in groups.items():
+        _split(name, mp, base_len, out)
+    return out
+
+def _split(name, mp, depth, out):
+    n = sum(len(v) for v in mp.values())
+    # Stop when small enough, too deep, or every fold here is shorter than the
+    # next cut — splitting those would make a bucket that can never be reached.
+    if (n <= BUCKET_MAX_RECORDS or depth >= BUCKET_MAX_DEPTH
+            or all(len(f) <= depth for f in mp)):
+        out[name] = mp
+        return
+    sub = collections.defaultdict(dict)
+    for f, recs in mp.items():
+        sub[f[:depth + 1] if len(f) > depth else f][f] = recs
+    for sname, smp in sub.items():
+        _split(sname, smp, depth + 1, out)
+
 def run_import(dicts, dge_root, clone_root=None, local_root=None,
                index_shard_len=2, entry_shard_len=3):
     koshas = os.path.join(dge_root, 'data', 'koshas')
     os.makedirs(os.path.join(koshas, '_index'), exist_ok=True)
     registry = {}
-    tier1 = collections.defaultdict(lambda: collections.defaultdict(list))  # 2char -> fold -> [rec]
+    tier1 = collections.defaultdict(list)          # fold -> [rec]; bucketed on write
     tax = collections.defaultdict(dict)
 
     for dcfg in dicts:
@@ -433,9 +483,19 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
         for item in items:
             f = item['fold']
             t2[(f[:entry_shard_len] or '_')][f].append(item)
-            tier1[(f[:index_shard_len] or '_')][f].append(
-                {'d': slug, 'h': item['headword'], 's': item['headword_slp1'],
-                 'hl': hlang, 'l': _langs_of(item)})
+            langs = _langs_of(item)
+            tier1[f].append({'d': slug, 'h': item['headword'], 's': item['headword_slp1'],
+                             'hl': hlang, 'l': langs})
+            # Synonyms become search keys too. Until now only the headword was
+            # indexed, so a dictionary citing हेलनं under the stem हेलन was
+            # unreachable by the form actually printed. A synonym record keeps
+            # the synonym as its display form but carries the headword's fold
+            # (w/f) so the entry itself can still be located.
+            for syn, syn_slp1 in _indexable_synonyms(item):
+                sf = fold(syn_slp1)
+                if not sf or sf == f: continue          # already reachable
+                tier1[sf].append({'d': slug, 'h': syn, 's': syn_slp1, 'hl': hlang,
+                                  'l': langs, 'w': item['headword'], 'f': f})
         for b, mp in t2.items():
             with open(os.path.join(edir, _safe(b) + '.json'), 'w', encoding='utf-8') as fo:
                 json.dump(mp, fo, ensure_ascii=False)
@@ -456,10 +516,12 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
                           'senses': sum(len(x['senses']) for x in items)}
         print(f'  ok {slug:<28} {len(items):>7} headwords  ({cat}, {hlang}->{glang})')
 
-    for b, mp in tier1.items():
+    buckets = _bucketize(tier1, index_shard_len)
+    for b, mp in buckets.items():
         with open(os.path.join(koshas, '_index', _safe(b) + '.json'), 'w', encoding='utf-8') as fo:
             json.dump(mp, fo, ensure_ascii=False)
-    manifest = {'buckets': sorted(tier1.keys()), 'index_shard_len': index_shard_len,
+    manifest = {'buckets': sorted(buckets.keys()), 'index_shard_len': index_shard_len,
+                'variable_buckets': True,
                 'entry_shard_len': entry_shard_len, 'dictionaries': registry,
                 'schema': 'kosha_entry'}
     with open(os.path.join(koshas, '_index', 'manifest.json'), 'w', encoding='utf-8') as fo:

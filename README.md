@@ -54,6 +54,27 @@ Dictionaries whose source repo is not checked out are reported and skipped, so
 a partial `sources/` still builds. The pre-multi-repo form
 (`--sources path/to/stardict-sanskrit`) still works and builds that repo's 63.
 
+## Index shape
+
+`_index/` is sharded by a **variable-width** fold prefix. It used to be a fixed
+two characters, which left `sa.json` at 16.8MB against a 1KB median — one search
+on a common prefix downloaded the whole neighbourhood. Any bucket over
+`BUCKET_MAX_RECORDS` is now split a character deeper, repeatedly, so bucket
+names run 1 to 5 characters and the worst shard is 2.6MB (p99 531KB).
+
+`manifest.json` carries `variable_buckets: true`. **A reader must match buckets
+by prefix, not by slicing the query to `index_shard_len`** — in both directions,
+since the bucket may be a prefix of the query or the query a prefix of the
+bucket. `js/kosha.js` does this and is a superset of the old rule, so it reads
+either corpus; an older reader cannot read this one. Ship the app change first.
+
+Synonyms are indexed alongside headwords: a synonym record keeps the synonym as
+its display form and carries the headword's fold and text (`f`/`w`) so the entry
+is still found under the headword. Latin-script synonyms are skipped — a genuine
+transliteration is already reachable, because the query is run through Sanscript
+before folding, and most of the rest are fragments of an English gloss that
+happened to follow a "|" in the source.
+
 ## What is deliberately not ingested
 
 Kept out on purpose, so a later reader does not mistake the gap for an
