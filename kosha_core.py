@@ -381,8 +381,14 @@ def build_items(entry_iter, slug, headword_language, gloss_language):
         if KEEP_RAW and rec['raw']:
             item['entry_raw'] = '\n\n'.join(r for r in rec['raw'] if r)
         if rec['syns']:
-            item['synonyms'] = sorted(rec['syns'])
-            item['synonyms_slp1'] = sorted({dev2slp1(s) for s in rec['syns']})
+            # One sorted list, transcoded elementwise — NOT two independent
+            # sorted() calls. Those produced arrays of different lengths in a
+            # different order (the SLP1 side was a set, so homographs collapsed),
+            # which silently broke any consumer pairing them by index: zipping
+            # them once filed वनमालिका under an unrelated synonym's fold.
+            syns = sorted(rec['syns'])
+            item['synonyms'] = syns
+            item['synonyms_slp1'] = [dev2slp1(x) for x in syns]
         items.append(item)
     return items
 
