@@ -454,6 +454,38 @@ def _split(name, mp, depth, out):
     for sname, smp in sub.items():
         _split(sname, smp, depth + 1, out)
 
+# Entry shards had the same skew the index did, and worse: pund-v1's "anu"
+# bucket was 14.87MB, and that file is fetched every time a reader opens an
+# entry it holds. Split on serialised BYTES rather than record count, because
+# what varies here is the length of the prose, not the number of headwords.
+ENTRY_MAX_BYTES = 600_000
+
+def _bucketize_entries(t2, base_len):
+    """-> (buckets, deep) where deep lists the prefixes that were split, so a
+    reader can walk from the base-length prefix down to the real bucket."""
+    groups = collections.defaultdict(dict)
+    for f, items in t2.items():
+        groups[(f[:base_len] or '_')][f] = items
+    out, deep = {}, set()
+    for name, mp in groups.items():
+        _split_entries(name, mp, base_len, out, deep)
+    return out, sorted(deep)
+
+def _weigh(mp):
+    return sum(len(json.dumps(v, ensure_ascii=False).encode()) for v in mp.values())
+
+def _split_entries(name, mp, depth, out, deep):
+    if (_weigh(mp) <= ENTRY_MAX_BYTES or depth >= BUCKET_MAX_DEPTH + 2
+            or all(len(f) <= depth for f in mp)):
+        out[name] = mp
+        return
+    deep.add(name)
+    sub = collections.defaultdict(dict)
+    for f, items in mp.items():
+        sub[f[:depth + 1] if len(f) > depth else f][f] = items
+    for sname, smp in sub.items():
+        _split_entries(sname, smp, depth + 1, out, deep)
+
 def run_import(dicts, dge_root, clone_root=None, local_root=None,
                index_shard_len=2, entry_shard_len=3):
     koshas = os.path.join(dge_root, 'data', 'koshas')
@@ -484,11 +516,14 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
 
         folder = os.path.join(koshas, cat, slug)
         edir = os.path.join(folder, 'e'); os.makedirs(edir, exist_ok=True)
-        # tier-2: full entries sharded by entry_shard_len
-        t2 = collections.defaultdict(lambda: collections.defaultdict(list))
+        # tier-2: full entries, collected flat by fold. Bucketing happens at
+        # write time so oversized buckets can be split deeper — pre-bucketing
+        # here is what made the first attempt a silent no-op, since every key
+        # was already its own prefix and nothing could be cut further.
+        t2 = collections.defaultdict(list)
         for item in items:
             f = item['fold']
-            t2[(f[:entry_shard_len] or '_')][f].append(item)
+            t2[f].append(item)
             langs = _langs_of(item)
             tier1[f].append({'d': slug, 'h': item['headword'], 's': item['headword_slp1'],
                              'hl': hlang, 'l': langs})
@@ -502,7 +537,8 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
                 if not sf or sf == f: continue          # already reachable
                 tier1[sf].append({'d': slug, 'h': syn, 's': syn_slp1, 'hl': hlang,
                                   'l': langs, 'w': item['headword'], 'f': f})
-        for b, mp in t2.items():
+        ebuckets, edeep = _bucketize_entries(t2, entry_shard_len)
+        for b, mp in ebuckets.items():
             with open(os.path.join(edir, _safe(b) + '.json'), 'w', encoding='utf-8') as fo:
                 json.dump(mp, fo, ensure_ascii=False)
         sm = {'slug': slug, 'name': dcfg.get('name', slug),
@@ -516,10 +552,16 @@ def run_import(dicts, dge_root, clone_root=None, local_root=None,
         with open(os.path.join(folder, 'meta.json'), 'w', encoding='utf-8') as fo:
             json.dump({'schema': 'kosha_entry', 'source_meta': sm,
                        'entry_shard_len': entry_shard_len,
-                       'buckets': sorted(t2.keys())}, fo, ensure_ascii=False)
+                       'deep': edeep,
+                       'buckets': sorted(ebuckets.keys())}, fo, ensure_ascii=False)
         tax[cat][slug] = {}
         registry[slug] = {**sm, 'category': cat, 'headwords': len(items),
                           'senses': sum(len(x['senses']) for x in items)}
+        # Only the split prefixes travel in the manifest, so a reader can find
+        # the right entry shard without fetching each dictionary's meta.json.
+        # Almost every dictionary splits nothing, so this is a handful of
+        # strings across the whole registry.
+        if edeep: registry[slug]['deep'] = edeep
         print(f'  ok {slug:<28} {len(items):>7} headwords  ({cat}, {hlang}->{glang})')
 
     buckets = _bucketize(tier1, index_shard_len)

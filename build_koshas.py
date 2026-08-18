@@ -80,6 +80,72 @@ def refresh_licences(dicts):
     return dicts
 
 
+
+def validate(out_root, manifest, sample=400):
+    """Structural check on what was just written. The entry-shard splitter once
+    shipped an extra nesting level — every shard became {bucket: {fold: [...]}}
+    instead of {fold: [...]} — and nothing complained, because the build only
+    ever counts headwords. A corpus that cannot be read back is a failed build,
+    so say so here rather than on someone's phone."""
+    import random, glob
+    koshas = os.path.join(out_root, 'data', 'koshas')
+    dicts = manifest['dictionaries']
+    problems = []
+
+    # 1. entry shards have the documented shape
+    files = glob.glob(os.path.join(koshas, '*', '*', 'e', '*.json'))
+    random.seed(0)
+    for f in random.sample(files, min(sample, len(files))):
+        try:
+            d = json.load(open(f, encoding='utf-8'))
+        except Exception as e:
+            problems.append('%s: unreadable (%s)' % (f, e)); continue
+        if not isinstance(d, dict):
+            problems.append('%s: top level is %s, expected object' % (f, type(d).__name__)); continue
+        for fold, items in list(d.items())[:3]:
+            if not isinstance(items, list):
+                problems.append('%s: %r maps to %s, expected a list of entries '
+                                '(extra nesting level?)' % (f, fold, type(items).__name__)); break
+            if items and not (isinstance(items[0], dict) and 'headword' in items[0]):
+                problems.append('%s: %r holds %r, expected entry objects' % (f, fold, type(items[0]).__name__)); break
+
+    # 2. a sampled index record can actually be resolved to its entry, walking
+    #    the deep-bucket list exactly as the app does
+    idx = [f for f in glob.glob(os.path.join(koshas, '_index', '*.json'))
+           if not f.endswith('manifest.json')]
+    checked = resolved = 0
+    for f in random.sample(idx, min(40, len(idx))):
+        shard = json.load(open(f, encoding='utf-8'))
+        for foldkey, recs in list(shard.items())[:5]:
+            for r in recs[:2]:
+                checked += 1
+                d = dicts.get(r['d'])
+                if not d: problems.append('index names unknown dictionary %r' % r['d']); continue
+                efold = r.get('f') or foldkey
+                b = efold[:manifest['entry_shard_len']]
+                for deep in [d.get('deep') or []]:
+                    while b in deep and len(b) < len(efold): b = efold[:len(b) + 1]
+                path = os.path.join(koshas, d['category'], r['d'], 'e', K._safe(b) + '.json')
+                if not os.path.exists(path):
+                    problems.append('%s/%s -> missing shard %s' % (r['d'], efold, os.path.basename(path))); continue
+                sh = json.load(open(path, encoding='utf-8'))
+                want = r.get('w') or r['h']
+                got = sh.get(efold, [])
+                # Defensive: part 1 may already have found a malformed shard, and
+                # a validator that raises tells you far less than one that reports.
+                if not isinstance(got, list) or any(not isinstance(x, dict) for x in got):
+                    problems.append('%s: fold %r in %s is not a list of entry objects'
+                                    % (r['d'], efold, os.path.basename(path))); continue
+                if any(it.get('headword') == want for it in got): resolved += 1
+                else: problems.append('%s: %r not found in %s under fold %r' % (r['d'], want, os.path.basename(path), efold))
+    print('validation: %d/%d sampled index records resolved to their entry' % (resolved, checked))
+    if problems:
+        print('!! %d structural problem(s):' % len(problems))
+        for p in problems[:10]: print('   ', p)
+        return False
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description='Build the full DGE Kosha corpus.')
     ap.add_argument('--sources', default='', help='checkout of indic-dict/stardict-sanskrit (legacy single-repo form)')
@@ -138,6 +204,9 @@ def main():
     # a compact per-dict report the Action prints to its log
     for slug, m in sorted(reg.items(), key=lambda kv: -kv[1]['headwords']):
         print('  %-32s %8d hw  %8d se  [%s]' % (slug, m['headwords'], m['senses'], m['license']))
+
+    if not validate(args.out, manifest):
+        sys.exit('BUILD FAILED validation — refusing to publish a corpus that cannot be read back.')
 
 
 if __name__ == '__main__':
