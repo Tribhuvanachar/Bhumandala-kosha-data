@@ -2,7 +2,7 @@
 
 Full-corpus build pipeline for the Kosha (Sanskrit dictionary) feature in
 [Bhumandala DGE](https://github.com/Tribhuvanachar/bhumandala). Kept as a
-separate repo because the full 100-dictionary corpus is ~1.9GB — over the
+separate repo because the full 101-dictionary corpus is ~1.9GB — over the
 main app repo's 1GB budget — and is served to the app over jsDelivr instead
 of being committed there.
 
@@ -10,7 +10,7 @@ of being committed there.
 
 - `kosha_core.py` — the importer (Devanagari→SLP1, HTML-body→senses, StarDict
   `.babylon` reader, two-tier sharder).
-- `dicts_config.json` — catalogue of all 100 dictionaries, with category,
+- `dicts_config.json` — catalogue of all 101 dictionaries, with category,
   language direction, licence, source repo and path (32 CC-BY-SA Cologne,
   8 CC-BY, 60 Unclear — see the app repo's `dge/kosha_toolkit/LICENSING.md`
   for the licence posture). Each entry names the `repo` it comes from:
@@ -21,7 +21,7 @@ of being committed there.
   | `indic-dict/stardict-sanskrit-kAvya` | 17 | Purāṇic Encyclopaedia, Purāṇa Index, Mahābhārata indices, Vedic Index, NCC, concordances, padapāṭhas |
   | `indic-dict/stardict-sanskrit-vyAkaraNa` | 13 | Aṣṭādhyāyī (Kāśikā, anuvṛtti, English), gaṇapāṭha, the dhātu literature, Abhyankar's grammar dictionary |
   | `sanskrit-lexicon/csl-orig` | 2 | the only two Cologne dictionaries the indic-dict mirror lacks |
-  | `local-dict-zip` | 5 | compiled StarDict binaries from the project lead's phone with no upstream `.babylon`/git source: WHO Ayurveda terms, WHO NIA non-clinical draft, Huet's *Dictionnaire — Héritage du Sanskrit*, Abhidhanamanjari, amara-onto (structured Amarakosha). Committed directly in this repo (`local-dict-zip/`, ~6.4MB — `.ifo`/`.idx`/`.dict.dz`/`.syn` only, not the built output) since there is no other repo to clone them from; the Action stages them with a symlink rather than a `git clone` step. Two more supplied the same way, `apte-sa`/`apte-bi`, are deliberately **not yet** in `dicts_config.json` — see the app repo's `dge/PENDING.md` (25 Aug 2026 entry) for why.
+  | `local-dict-zip` | 6 | compiled StarDict binaries from the project lead's phone with no upstream `.babylon`/git source: WHO Ayurveda terms, WHO NIA non-clinical draft, Huet's *Dictionnaire — Héritage du Sanskrit*, Abhidhanamanjari, amara-onto (structured Amarakosha), apte-sa (Apte's unabridged Practical Sanskrit-English Dictionary). Committed directly in this repo (`local-dict-zip/`, ~6.4MB — `.ifo`/`.idx`/`.dict.dz`/`.syn` only, not the built output) since there is no other repo to clone them from; the Action stages them with a symlink rather than a `git clone` step. One more supplied the same way, `apte-bi`, is deliberately **not** in `dicts_config.json` — see the app repo's `dge/PENDING.md` (25 Aug 2026 entry) for why.
 
   An entry may also carry parser knobs the source needs — `head_pick`,
   `head_strip`, `syn_drop`, `link_text`, `block_breaks`, `strip`, `json_body`,
@@ -35,7 +35,7 @@ of being committed there.
 ## Running the build
 
 **Via GitHub Actions (recommended):** Actions tab → **Build Kosha corpus** →
-**Run workflow**. Leave `only` blank to build all 100 dictionaries, or give a
+**Run workflow**. Leave `only` blank to build all 101 dictionaries, or give a
 comma-separated list of slugs for a smaller test run. The Action clones the
 three `indic-dict` source repos, builds the corpus, and force-pushes it as a
 single commit to a `dist` branch (so this repo's own history never bloats).
