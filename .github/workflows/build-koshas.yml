@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Comma-separated slugs to build (blank = all 95)"
+        description: "Comma-separated slugs to build (blank = all 100)"
         required: false
         default: ""
       raw:
@@ -68,6 +68,13 @@ jobs:
           cd sources/csl-orig
           git sparse-checkout set --no-cone 'v02/pwkvn/pwkvn.txt' 'v02/krm/krm.txt'
           git checkout
+          cd ../..
+          # "local-dict-zip" isn't cloned from anywhere -- it's committed directly
+          # in this repo's own main branch (small, ~6.4MB of compiled StarDict
+          # .ifo/.idx/.dict.dz/.syn files supplied from the project lead's phone,
+          # not redistributable .babylon source), so the checkout already has it
+          # at the repo root. Just point the sources tree at it.
+          ln -s "$(pwd)/local-dict-zip" sources/local-dict-zip
 
       - name: Build corpus
         env:

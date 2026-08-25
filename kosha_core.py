@@ -274,6 +274,20 @@ def _dict_bytes(base):
         with open(base + '.dict', 'rb') as g: return g.read()
     raise FileNotFoundError(base + '.dict[.dz]')
 
+# Compiled-binary artifacts seen in real personal dict.zip StarDict
+# compilations (not the indic-dict .babylon sources, which don't show this):
+# a stray U+00A0/zero-width/BOM glued to a headword or synonym, or an .idx
+# "word" that is literally bare markup like "<p></p>" from whatever tool
+# produced the compilation. Neither is real headword text.
+_STARDICT_WS = ' ​﻿ \t\r\n'
+
+def _clean_stardict_word(w):
+    """-> cleaned word, or None if it's empty/markup-only after stripping."""
+    w = w.strip(_STARDICT_WS)
+    if not w or not re.sub(r'<[^>]*>', '', w).strip(_STARDICT_WS):
+        return None
+    return w
+
 def iter_stardict(ifo_path):
     base = re.sub(r'\.ifo$', '', ifo_path)
     ifo = _read_ifo(ifo_path)
@@ -301,6 +315,9 @@ def iter_stardict(ifo_path):
             widx = struct.unpack('>I', syn[j+1:j+5])[0]; k = j + 5
             if 0 <= widx < len(words): syn_map[widx].append(sw)
     for wi, (word, off, size) in enumerate(words):
+        word = _clean_stardict_word(word)
+        if word is None:
+            continue
         chunk = dictdata[off:off+size]
         if sts:                                   # single declared type: whole chunk
             body = chunk.decode('utf-8', 'replace')
@@ -313,7 +330,8 @@ def iter_stardict(ifo_path):
                     body = chunk[1:(end if end > 0 else len(chunk))].decode('utf-8', 'replace')
                 else:
                     body = chunk.decode('utf-8', 'replace')
-        yield word, syn_map.get(wi, []), body
+        syns = [s for s in (_clean_stardict_word(s) for s in syn_map.get(wi, [])) if s is not None]
+        yield word, syns, body
 
 # ---------- input kind 3: Cologne (sanskrit-lexicon/csl-orig) -----------------
 # The canonical Cologne sources, one .txt per dictionary under v02/<code>/. An
