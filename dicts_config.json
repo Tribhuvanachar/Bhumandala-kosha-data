@@ -1299,5 +1299,19 @@
     "source_url": "",
     "license_note": "Structured/ontology cut of Amarakosha (semantic category + citation locator per entry), distinct from the running-text amarakosha/amara-sudha already loaded.",
     "path": "amara-onto/amara-onto.ifo"
+  },
+  {
+    "slug": "apte-sa",
+    "kind": "stardict",
+    "repo": "local-dict-zip",
+    "category": "sanskrit_english",
+    "headword_language": "sa",
+    "gloss_language": "en",
+    "name": "Apte's Practical Sanskrit-English Dictionary (sa-en, unabridged)",
+    "license": "Unclear (no LICENSE.xml -- personal dict.zip)",
+    "attribution": "V. S. Apte, The Practical Sanskrit-English Dictionary -- StarDict compilation distinct from the apte-1890/apte-1957 Cologne editions already loaded",
+    "source_url": "",
+    "license_note": "122,627 raw wordcount vs the already-loaded Cologne Apte editions; 35,878 headwords after dedup, 100% real Devanagari headwords (verified against apte-bi, its sibling in the same dict.zip, which is 100% romanized/Latin headwords and was deliberately not loaded -- different indexing shape, not this schema's headword_language:sa convention).",
+    "path": "apte-sa/apte-sa.ifo"
   }
 ]
