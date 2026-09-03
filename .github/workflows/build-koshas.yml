@@ -133,4 +133,7 @@ jobs:
         run: |
           curl -sf "https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/data/koshas/_index/manifest.json" || true
           curl -sf "https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/data/koshas_r/manifest.json" || true
+          echo "== PIN THIS =="
+          echo "New dist SHA (update koshaDataBase/koshaRenderBase in the app repo's dge/js/config.js and admin/kosha.html, then bump config ?v=):"
+          git ls-remote "https://github.com/${{ github.repository }}.git" dist | cut -f1
           echo "Note: jsDelivr caches branch files ~12h; individual shard files purge on first request or via https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/<path>"
