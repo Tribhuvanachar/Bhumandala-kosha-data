@@ -32,7 +32,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - name: Checkout build scripts (main branch of this data repo)
         uses: actions/checkout@v4
@@ -88,11 +88,33 @@ jobs:
           if [ -n "$INPUT_ONLY" ]; then args+=(--only "$INPUT_ONLY"); fi
           python build_koshas.py "${args[@]}"
 
+      - name: Compile enriched render tree (koshas_r)
+        # tools/kosha_enrich.py lives in the app repo alongside the sutra
+        # index it validates Panini references against; both are fetched
+        # sparsely. cwd must be the app checkout so the tool's repo-relative
+        # SUTRA_INDEX path resolves. The enriched tree ships on dist next to
+        # the raw corpus and is what dge/kosha2.html renders natively from.
+        run: |
+          set -e
+          git clone --depth 1 --filter=blob:none --no-checkout \
+            https://github.com/Tribhuvanachar/bhumandala.git app
+          cd app
+          git sparse-checkout set --no-cone \
+            'tools/kosha_enrich.py' \
+            'dge/data/vedanga/vyakarana/ashtadhyayi/_index/sutra_index.json'
+          git checkout
+          python tools/kosha_enrich.py \
+            --src "$GITHUB_WORKSPACE/build/data/koshas" \
+            --dst "$GITHUB_WORKSPACE/build/data/koshas_r"
+          cd ..
+          rm -rf app
+
       - name: Report corpus size
         run: |
-          du -sh build/data/koshas
+          du -sh build/data/koshas build/data/koshas_r
           echo "manifest dictionaries:"
           python -c "import json;m=json.load(open('build/data/koshas/_index/manifest.json'));print(len(m['dictionaries']),'dicts,',len(m['buckets']),'buckets')"
+          python -c "import json;m=json.load(open('build/data/koshas_r/manifest.json'));print(len(m['dictionaries']),'enriched dicts')"
 
       - name: Deploy to dist branch (single commit — no history bloat)
         run: |
@@ -110,4 +132,5 @@ jobs:
       - name: Purge jsDelivr cache for the manifest (best-effort)
         run: |
           curl -sf "https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/data/koshas/_index/manifest.json" || true
+          curl -sf "https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/data/koshas_r/manifest.json" || true
           echo "Note: jsDelivr caches branch files ~12h; individual shard files purge on first request or via https://purge.jsdelivr.net/gh/${{ github.repository }}@dist/<path>"
