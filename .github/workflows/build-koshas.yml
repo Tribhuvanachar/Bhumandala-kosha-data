@@ -109,9 +109,14 @@ jobs:
           cd ..
           rm -rf app
 
+      - name: Build gloss inverted index (search inside meanings)
+        # data/koshas/_gloss — Devanagari gloss tokens -> [dict, headword, n],
+        # what dge/js/kosha.js glossSearch() (kosha2's अर्थे mode) reads.
+        run: python build_gloss_index.py --src build/data/koshas
+
       - name: Report corpus size
         run: |
-          du -sh build/data/koshas build/data/koshas_r
+          du -sh build/data/koshas build/data/koshas_r build/data/koshas/_gloss
           echo "manifest dictionaries:"
           python -c "import json;m=json.load(open('build/data/koshas/_index/manifest.json'));print(len(m['dictionaries']),'dicts,',len(m['buckets']),'buckets')"
           python -c "import json;m=json.load(open('build/data/koshas_r/manifest.json'));print(len(m['dictionaries']),'enriched dicts')"
